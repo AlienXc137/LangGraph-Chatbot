@@ -5,3 +5,5 @@ google-genai
 langchain_google_genai
 dotenv
 langgraph-checkpoint-sqlite
+langchain-community
+ddgs

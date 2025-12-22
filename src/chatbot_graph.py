@@ -7,17 +7,24 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 import sqlite3
+from tools import tools
+from langgraph.prebuilt import ToolNode, tools_condition
 
 load_dotenv()
 llm=ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+#binding llm to tools
+llm_with_tools=llm.bind_tools(tools)
 
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 def chat_node(state: ChatState):
     messages = state['messages']
-    response = llm.invoke(messages)
+    response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
+
+tool_node=ToolNode(tools)
 
 conn=sqlite3.connect(database="chatbot.db", check_same_thread=False)
 # Checkpointer
@@ -25,8 +32,11 @@ checkpointer = SqliteSaver(conn=conn)
 
 graph = StateGraph(ChatState)
 graph.add_node("chat_node", chat_node)
+graph.add_node("tools", tool_node)
+
 graph.add_edge(START, "chat_node")
-graph.add_edge("chat_node", END)
+graph.add_conditional_edges("chat_node", tools_condition)
+graph.add_edge("tools", "chat_node")
 
 chatbot = graph.compile(checkpointer=checkpointer)
 
