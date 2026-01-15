@@ -1,5 +1,6 @@
 import streamlit as st
-from chatbot_graph import chatbot, retrieve_all_threads
+from chatbot_graph import chatbot, retrieve_all_threads, thread_document_metadata
+from RAG.ingestion import ingest_pdf
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 import uuid
 
@@ -45,32 +46,60 @@ if 'thread_id' not in st.session_state: # creating unique thread id for each ses
 if 'chat_threads' not in st.session_state:
     st.session_state['chat_threads'] = retrieve_all_threads()
 
+if "ingested_docs" not in st.session_state:
+    st.session_state["ingested_docs"] = {}
+
 add_thread(st.session_state['thread_id'])
+
+thread_key = str(st.session_state["thread_id"])
+thread_docs = st.session_state["ingested_docs"].setdefault(thread_key, {})
+threads = st.session_state["chat_threads"][::-1]
+selected_thread = None
 
 #Sidebar UI
 st.sidebar.title("LangGraph Chatbot")
+st.sidebar.markdown(f"**Thread ID:** `{thread_key}`")
 
-if st.sidebar.button('New Chat'):
+if st.sidebar.button("New Chat", use_container_width=True):
     reset_chat()
+    st.rerun()
+
+if thread_docs:
+    latest_doc = list(thread_docs.values())[-1]
+    st.sidebar.success(
+        f"Using `{latest_doc.get('filename')}` "
+        f"({latest_doc.get('chunks')} chunks from {latest_doc.get('documents')} pages)"
+    )
+else:
+    st.sidebar.info("No PDF indexed yet.")
+
+uploaded_pdf = st.sidebar.file_uploader("Upload a PDF for this chat", type=["pdf"])
+if uploaded_pdf:
+    if uploaded_pdf.name in thread_docs:
+        st.sidebar.info(f"`{uploaded_pdf.name}` already processed for this chat.")
+    else:
+        with st.sidebar.status("Indexing PDF…", expanded=True) as status_box:
+            summary = ingest_pdf(
+                uploaded_pdf.getvalue(),
+                thread_id=thread_key,
+                filename=uploaded_pdf.name,
+            )
+            thread_docs[uploaded_pdf.name] = summary
+            status_box.update(label="✅ PDF indexed", state="complete", expanded=False)
 
 st.sidebar.header('Conversations')
-for thread_id in st.session_state['chat_threads'][::-1]:
-    first_msg = first_question(thread_id)
-    label = first_msg[:30] + "..." if len(first_msg) > 40 else first_msg
-    if st.sidebar.button(str(label),key=str(thread_id)):
-        st.session_state['thread_id']=thread_id
-        messages=load_conversation(thread_id)
+if not threads:
+    st.sidebar.write("No past conversations yet.")
+else:
+    for thread_id in threads:
+        first_msg = first_question(thread_id)
+        label = first_msg[:30] + "..." if len(first_msg) > 40 else first_msg
+        if st.sidebar.button(str(label),key=str(thread_id),width="stretch"):
+            selected_thread = thread_id
 
-        temp_message=[]
-        for msg in messages:
-            if isinstance(msg, HumanMessage):
-                role='user'
-            else:
-                role='assistant'
-            temp_message.append({'role':role,'content':msg.content})
-        
-        st.session_state['message_history']=temp_message
 #Main UI
+st.title("Multi Utility Chatbot")
+
 for message in st.session_state['message_history']:
     with st.chat_message(message['role']):
         st.text(message['content'])
@@ -125,6 +154,26 @@ if user_input:
         
 
     st.session_state['message_history'].append({'role':'assistant','content':ai_message})
+
+    doc_meta = thread_document_metadata(thread_key)
+    if doc_meta:
+        st.caption(
+            f"Document indexed: {doc_meta.get('filename')} "
+            f"(chunks: {doc_meta.get('chunks')}, pages: {doc_meta.get('documents')})"
+        )
     
+st.divider()
+
+if selected_thread:
+    st.session_state["thread_id"] = selected_thread
+    messages = load_conversation(selected_thread)
+
+    temp_messages = []
+    for msg in messages:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        temp_messages.append({"role": role, "content": msg.content})
+    st.session_state["message_history"] = temp_messages
+    st.session_state["ingested_docs"].setdefault(str(selected_thread), {})
+    st.rerun()
 
 

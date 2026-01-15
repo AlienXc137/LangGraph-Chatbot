@@ -1,8 +1,11 @@
 from langgraph.graph import StateGraph, START, END
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.tools import tool
+from typing import Optional
 import requests
 import os
+
+from RAG.retriever import _THREAD_METADATA, _get_retriever
 
 # Tool 1
 search_tool = DuckDuckGoSearchRun(region="us-en")
@@ -44,4 +47,30 @@ def get_stock_price(symbol: str)-> dict:
     response=requests.get(url)
     return response.json()
 
-tools=[search_tool, calculator, get_stock_price]
+# Tool 3 
+@tool
+def rag_tool(query: str, thread_id: Optional[str] = None) -> dict:
+    """
+    Retrieve relevant information from the uploaded PDF for this chat thread.
+    Always include the thread_id when calling this tool.
+    """
+    retriever = _get_retriever(thread_id)
+    if retriever is None:
+        return {
+            "error": "No document indexed for this chat. Upload a PDF first.",
+            "query": query,
+        }
+
+    result = retriever.invoke(query)
+    context = [doc.page_content for doc in result]
+    metadata = [doc.metadata for doc in result]
+
+    return {
+        "query": query,
+        "context": context,
+        "metadata": metadata,
+        "source_file": _THREAD_METADATA.get(str(thread_id), {}).get("filename"),
+    }
+
+tools=[search_tool, calculator, get_stock_price, rag_tool]
+
